@@ -130,11 +130,7 @@ QPushButton:pressed
             """
         )
 
-        # заполнитель контактов для
-        if self.database:
-            self.selector.addItems(sorted(self.database.get_contacts()))
-        else:
-            self.selector.addItems(sorted(['user1', 'user2', 'user3']))
+        self.selector.addItems(sorted(self.database.get_contacts()))
 
 
 if __name__ == '__main__':
