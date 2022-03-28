@@ -1,343 +1,22 @@
-import sys
-import json
-import socket
-import time
-import dis
-import argparse
 import logging
-import threading
 import logs.config_client_log
+import argparse
+import sys
+from PyQt5.QtWidgets import QApplication
+
 from common.variables import *
-from common.utils import *
-from errors import IncorrectDataRecivedError, ReqFieldMissingError, ServerError
-from decos import log
-from metaclasses import ClientMaker
-from client_database import ClientDatabase
+from common.errors import ServerError
+from common.decos import log
+from client.database import ClientDatabase
+from client.transport import ClientTransport
+from client.main_window import ClientMainWindow
+from client.start_dialog import UserNameDialog
 
 # Инициализация клиентского логера
 logger = logging.getLogger('client')
 
 
-# Класс формировки и отправки сообщений на сервер и взаимодействия с пользователем.
-class ClientSender(threading.Thread, metaclass=ClientMaker):
-    def __init__(self, account_name, sock, database, locks, **kwargs):
-        self.locks = locks
-        self.account_name = account_name
-        self.sock = sock
-        self.database = database
-        super().__init__(**kwargs)
-
-    # Функция создаёт словарь с сообщением о выходе.
-    def create_exit_message(self):
-        return {
-            ACTION: EXIT,
-            TIME: time.time(),
-            ACCOUNT_NAME: self.account_name
-        }
-
-    # Функция запрашивает кому отправить сообщение и само сообщение, и отправляет полученные данные на сервер.
-    def create_message(self):
-        to = input('Введите получателя сообщения: ')
-        message = input('Введите сообщение для отправки: ')
-
-        # Проверим, что получатель существует
-        with self.locks['database']:
-            if not self.database.check_user(to):
-                logger.error(f'Попытка отправить сообщение незарегистрированому получателю: {to}')
-                return
-
-        message_dict = {
-            ACTION: MESSAGE,
-            SENDER: self.account_name,
-            DESTINATION: to,
-            TIME: time.time(),
-            MESSAGE_TEXT: message
-        }
-        logger.debug(f'Сформирован словарь сообщения: {message_dict}')
-
-        # Сохраняем сообщения для истории
-        with self.locks['database']:
-            self.database.save_message(self.account_name, to, message)
-
-        # Необходимо дождаться освобождения сокета для отправки сообщения
-        with self.locks['socket']:
-            try:
-                send_message(self.sock, message_dict)
-                logger.info(f'Отправлено сообщение для пользователя {to}')
-            except OSError as err:
-                if err.errno:
-                    logger.critical('Потеряно соединение с сервером.')
-                    exit(1)
-                else:
-                    logger.error('Не удалось передать сообщение. Таймаут соединения')
-
-    # Функция взаимодействия с пользователем, запрашивает команды, отправляет сообщения
-    def run(self):
-        self.print_help()
-        while True:
-            command = input('Введите команду: ')
-            if command == 'message':
-                self.create_message()
-            elif command == 'help':
-                self.print_help()
-            elif command == 'exit':
-                with self.locks['socket']:
-                    try:
-                        send_message(self.sock, self.create_exit_message())
-                    except:
-                        pass
-                    print('Завершение соединения.')
-                    logger.info('Завершение работы по команде пользователя.')
-                # Задержка неоходима, чтобы успело уйти сообщение о выходе
-                time.sleep(0.5)
-                break
-
-            # Список контактов
-            elif command == 'contacts':
-                with self.locks['database']:
-                    contacts_list = self.database.get_contacts()
-                for contact in contacts_list:
-                    print(contact)
-
-            # Редактирование контактов
-            elif command == 'edit':
-                self.edit_contacts()
-
-            # история сообщений.
-            elif command == 'history':
-                self.print_history()
-
-            else:
-                print('Команда не распознана, попробойте снова. help - вывести поддерживаемые команды.')
-
-    # Функция выводящяя справку по использованию.
-    def print_help(self):
-        print('Поддерживаемые команды:')
-        print('message - отправить сообщение. Кому и текст будет запрошены отдельно.')
-        print('history - история сообщений')
-        print('contacts - список контактов')
-        print('edit - редактирование списка контактов')
-        print('help - вывести подсказки по командам')
-        print('exit - выход из программы')
-
-    # Функция выводящяя историю сообщений
-    def print_history(self):
-        ask = input('Показать входящие сообщения - in, исходящие - out, все - просто Enter: ')
-        with self.locks['database']:
-            if ask == 'in':
-                history_list = self.database.get_history(to_who=self.account_name)
-                for message in history_list:
-                    print(f'\nСообщение от пользователя: {message[0]} от {message[3]}:\n{message[2]}')
-            elif ask == 'out':
-                history_list = self.database.get_history(from_who=self.account_name)
-                for message in history_list:
-                    print(f'\nСообщение пользователю: {message[1]} от {message[3]}:\n{message[2]}')
-            else:
-                history_list = self.database.get_history()
-                for message in history_list:
-                    print(
-                        f'\nСообщение от пользователя: {message[0]}, пользователю {message[1]} от {message[3]}\n{message[2]}')
-
-    # Функция изменеия контактов
-    def edit_contacts(self):
-        ans = input('Для удаления введите del, для добавления add: ')
-        if ans == 'del':
-            edit = input('Введите имя удаляемного контакта: ')
-            with self.locks['database']:
-                if self.database.check_contact(edit):
-                    self.database.del_contact(edit)
-                else:
-                    logger.error('Попытка удаления несуществующего контакта.')
-        elif ans == 'add':
-            # Проверка на возможность такого контакта
-            edit = input('Введите имя создаваемого контакта: ')
-            if self.database.check_user(edit):
-                with self.locks['database']:
-                    self.database.add_contact(edit)
-                with self.locks['socket']:
-                    try:
-                        add_contact(self.sock, self.account_name, edit)
-                    except ServerError:
-                        logger.error('Не удалось отправить информацию на сервер.')
-
-
-# Класс-приёмник сообщений с сервера. Принимает сообщения, выводит в консоль , сохраняет в базу.
-class ClientReceiver(threading.Thread, metaclass=ClientMaker):
-    def __init__(self, account_name, sock, database, locks, **kwargs):
-        self.locks = locks
-        self.account_name = account_name
-        self.sock = sock
-        self.database = database
-        super().__init__(**kwargs)
-
-    # Основной цикл приёмника сообщений, принимает сообщения, выводит в консоль. Завершается при потере соединения.
-    def run(self):
-        while True:
-            # Отдыхаем секунду и снова пробуем захватить сокет.
-            # если не сделать тут задержку, то второй поток может достаточно долго ждать освобождения сокета.
-            time.sleep(1)
-            with self.locks['socket']:
-                try:
-                    message = get_message(self.sock)
-
-                # Принято некорректное сообщение
-                except IncorrectDataRecivedError:
-                    logger.error(f'Не удалось декодировать полученное сообщение.')
-                # Вышел таймаут соединения если errno = None, иначе обрыв соединения.
-                except OSError as err:
-                    if err.errno:
-                        logger.critical(f'Потеряно соединение с сервером.')
-                        break
-                # Проблемы с соединением
-                except (ConnectionError, ConnectionAbortedError, ConnectionResetError, json.JSONDecodeError):
-                    logger.critical(f'Потеряно соединение с сервером.')
-                    break
-                # Если пакет корретно получен выводим в консоль и записываем в базу.
-                else:
-                    if ACTION in message and message[ACTION] == MESSAGE and SENDER in message and DESTINATION in message \
-                            and MESSAGE_TEXT in message and message[DESTINATION] == self.account_name:
-                        print(f'\nПолучено сообщение от пользователя {message[SENDER]}:\n{message[MESSAGE_TEXT]}')
-                        # Захватываем работу с базой данных и сохраняем в неё сообщение
-                        with self.locks['database']:
-                            try:
-                                self.database.save_message(message[SENDER], self.account_name, message[MESSAGE_TEXT])
-                            except:
-                                logger.error('Ошибка взаимодействия с базой данных')
-
-                        logger.info(f'Получено сообщение от пользователя {message[SENDER]}:\n{message[MESSAGE_TEXT]}')
-                    else:
-                        logger.error(f'Получено некорректное сообщение с сервера: {message}')
-
-
-class Client:
-    def __init__(self, client_name, transport, database):
-        locks = {'socket': threading.Lock(), 'database': threading.Lock()}
-        self.sender = ClientSender(client_name, transport, database, locks, daemon=True)
-        self.receiver = ClientReceiver(client_name, transport, database, locks, daemon=True)
-        logger.debug('Клиентские классы инициализированны')
-
-    def start(self):
-        self.sender.start()
-        self.receiver.start()
-        logger.debug('Запущены процессы')
-
-
-# Функция генерирует запрос о присутствии клиента
-@log
-def create_presence(account_name):
-    out = {
-        ACTION: PRESENCE,
-        TIME: time.time(),
-        USER: {
-            ACCOUNT_NAME: account_name
-        }
-    }
-    logger.debug(f'Сформировано {PRESENCE} сообщение для пользователя {account_name}')
-    return out
-
-
-# Функция разбирает ответ сервера на сообщение о присутствии, возращает 200 если все ОК или генерирует исключение при\
-# ошибке.
-@log
-def process_response_ans(message):
-    logger.debug(f'Разбор приветственного сообщения от сервера: {message}')
-    if RESPONSE in message:
-        if message[RESPONSE] == 200:
-            return '200 : OK'
-        elif message[RESPONSE] == 400:
-            raise ServerError(f'400 : {message[ERROR]}')
-    raise ReqFieldMissingError(RESPONSE)
-
-
-def contacts_list_request(sock, name):
-    logger.debug(f'Запрос контакт листа для пользователя {name}')
-    req = {
-        ACTION: GET_CONTACTS,
-        TIME: time.time(),
-        USER: name
-    }
-    logger.debug(f'Сформирован запрос {req}')
-    send_message(sock, req)
-    ans = get_message(sock)
-    logger.debug(f'Получен ответ {ans}')
-    if RESPONSE in ans and ans[RESPONSE] == 202:
-        return ans[LIST_INFO]
-    else:
-        raise ServerError
-
-
-# Функция добавления пользователя в контакт лист
-def add_contact(sock, username, contact):
-    logger.debug(f'Создание контакта {contact}')
-    req = {
-        ACTION: ADD_CONTACT,
-        TIME: time.time(),
-        USER: username,
-        ACCOUNT_NAME: contact
-    }
-    send_message(sock, req)
-    ans = get_message(sock)
-    if RESPONSE in ans and ans[RESPONSE] == 200:
-        pass
-    else:
-        raise ServerError('Ошибка создания контакта')
-    print('Удачное создание контакта.')
-
-
-# Функция запроса списка известных пользователей
-def user_list_request(sock, username):
-    logger.debug(f'Запрос списка известных пользователей {username}')
-    req = {
-        ACTION: USERS_REQUEST,
-        TIME: time.time(),
-        ACCOUNT_NAME: username
-    }
-    send_message(sock, req)
-    ans = get_message(sock)
-    if RESPONSE in ans and ans[RESPONSE] == 202:
-        return ans[LIST_INFO]
-    else:
-        raise ServerError
-
-
-# Функция удаления пользователя из контакт листа
-def remove_contact(sock, username, contact):
-    logger.debug(f'Создание контакта {contact}')
-    req = {
-        ACTION: REMOVE_CONTACT,
-        TIME: time.time(),
-        USER: username,
-        ACCOUNT_NAME: contact
-    }
-    send_message(sock, req)
-    ans = get_message(sock)
-    if RESPONSE in ans and ans[RESPONSE] == 200:
-        pass
-    else:
-        raise ServerError('Ошибка удаления клиента')
-    print('Удачное удаление')
-
-
-def load_database(sock, database, username):
-    # Загружаем список известных пользователей
-    try:
-        users_list = user_list_request(sock, username)
-    except ServerError:
-        logger.error('Ошибка запроса списка известных пользователей.')
-    else:
-        database.add_users(users_list)
-
-    # Загружаем список контактов
-    try:
-        contacts_list = contacts_list_request(sock, username)
-    except ServerError:
-        logger.error('Ошибка запроса списка контактов.')
-    else:
-        for contact in contacts_list:
-            database.add_contact(contact)
-
-
-# Парсер аргументов коммандной строки
+# Парсер аргументов командной строки
 @log
 def arg_parser():
     parser = argparse.ArgumentParser()
@@ -359,65 +38,48 @@ def arg_parser():
     return server_address, server_port, client_name
 
 
-def main():
-    # Сообщаем о запуске
-    print('Консольный месседжер. Клиентский модуль.')
-
-    # Загружаем параметы коммандной строки
+# Основная функция клиента
+if __name__ == '__main__':
+    # Загружаем параметры командной строки
     server_address, server_port, client_name = arg_parser()
 
-    # Если имя пользователя не было задано, необходимо запросить пользователя.
+    # Создаём клиентское приложение
+    client_app = QApplication(sys.argv)
+
+    # Если имя пользователя не было указано в командной строке то запросим его
     if not client_name:
-        client_name = input('Введите имя пользователя: ')
-    else:
-        print(f'Клиентский модуль запущен с именем: {client_name}')
+        start_dialog = UserNameDialog()
+        client_app.exec_()
+        # Если пользователь ввёл имя и нажал ОК, то сохраняем ведённое и удаляем объект, инааче выходим
+        if start_dialog.ok_pressed:
+            client_name = start_dialog.client_name.text()
+            del start_dialog
+        else:
+            exit(0)
 
+    # Записываем логи
     logger.info(
-        f'Запущен клиент с парамертами: адрес сервера: {server_address} , порт: {server_port}, имя пользователя: {client_name}')
+        f'Запущен клиент с парамертами: адрес сервера: {server_address} , порт: {server_port}, '
+        f'имя пользователя: {client_name}')
 
-    # Инициализация сокета и сообщение серверу о нашем появлении
+    # Создаём объект базы данных
+    database = ClientDatabase(client_name)
+
+    # Создаём объект - транспорт и запускаем транспортный поток
     try:
-        transport = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        # Таймаут 1 секунда, необходим для освобождения сокета.
-        transport.settimeout(1)
-
-        transport.connect((server_address, server_port))
-        send_message(transport, create_presence(client_name))
-        answer = process_response_ans(get_message(transport))
-        logger.info(f'Установлено соединение с сервером. Ответ сервера: {answer}')
-        print(f'Установлено соединение с сервером.')
-    except json.JSONDecodeError:
-        logger.error('Не удалось декодировать полученную Json строку.')
-        exit(1)
+        transport = ClientTransport(server_port, server_address, database, client_name)
     except ServerError as error:
-        logger.error(f'При установке соединения сервер вернул ошибку: {error.text}')
+        print(error.text)
         exit(1)
-    except ReqFieldMissingError as missing_error:
-        logger.error(f'В ответе сервера отсутствует необходимое поле {missing_error.missing_field}')
-        exit(1)
-    except (ConnectionRefusedError, ConnectionError):
-        logger.critical(
-            f'Не удалось подключиться к серверу {server_address}:{server_port}, конечный компьютер отверг запрос на '
-            f'подключение.')
-        exit(1)
-    else:
+    transport.setDaemon(True)
+    transport.start()
 
-        # Инициализация БД
-        database = ClientDatabase(client_name)
-        load_database(transport, database, client_name)
+    # Создаём GUI
+    main_window = ClientMainWindow(database, transport)
+    main_window.make_connection(transport)
+    main_window.setWindowTitle(f'Чат Программа alpha release - {client_name}')
+    client_app.exec_()
 
-        client = Client(client_name, transport, database)
-        client.start()
-
-        # Watchdog основной цикл, если один из потоков завершён, то значит или потеряно соединение или пользователь
-        # ввёл exit. Поскольку все события обрабатываются в потоках, достаточно просто завершить цикл.
-        while True:
-            time.sleep(1)
-            if client.receiver.is_alive() and client.sender.is_alive():
-                continue
-            break
-
-
-if __name__ == '__main__':
-    main()
+    # Раз графическая оболочка закрылась, закрываем транспорт
+    transport.transport_shutdown()
+    transport.join()

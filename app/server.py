@@ -9,8 +9,8 @@ from PyQt5.QtWidgets import QApplication, QMessageBox
 from server_database import ServerDb
 from common.variables import *
 from common.utils import *
-from decos import log
-from descrptrs import Port
+from common.decos import log
+from common.descrptrs import Port
 from metaclasses import ServerMaker
 
 # Инициализация логирования сервера.
@@ -100,19 +100,19 @@ class Server(threading.Thread, metaclass=ServerMaker):
             if recv_data_lst:
                 for client_with_message in recv_data_lst:
                     try:
-                        self.process_client_message(
-                            get_message(client_with_message), client_with_message)
+                        self.process_client_message(get_message(client_with_message), client_with_message)
                     except (OSError):
                         # Ищем клиента в словаре клиентов и удаляем его из него
                         # и  базы подключённых
-                        logger.info(
-                            f'Клиент {client_with_message.getpeername()} отключился от сервера.')
+                        logger.info(f'Клиент {client_with_message.getpeername()} отключился от сервера.')
                         for name in self.names:
                             if self.names[name] == client_with_message:
                                 self.database.user_logout(name)
                                 del self.names[name]
                                 break
                         self.clients.remove(client_with_message)
+                        with self.connected_lock:
+                            self.new_connection = True
 
             # Если есть сообщения, обрабатываем каждое.
             for message in self.messages:
@@ -121,7 +121,10 @@ class Server(threading.Thread, metaclass=ServerMaker):
                 except (ConnectionAbortedError, ConnectionError, ConnectionResetError, ConnectionRefusedError):
                     logger.info(f'Связь с клиентом с именем {message[DESTINATION]} была потеряна')
                     self.clients.remove(self.names[message[DESTINATION]])
+                    self.database.user_logout(message[DESTINATION])
                     del self.names[message[DESTINATION]]
+                    with self.connected_lock:
+                        self.new_connection = True
             self.messages.clear()
 
     # Функция адресной отправки сообщения определённому клиенту. Принимает словарь сообщение, список зарегистрированых
@@ -146,8 +149,7 @@ class Server(threading.Thread, metaclass=ServerMaker):
             if message[USER][ACCOUNT_NAME] not in self.names.keys():
                 self.names[message[USER][ACCOUNT_NAME]] = client
                 client_ip, client_port = client.getpeername()
-                self.database.user_login(
-                    message[USER][ACCOUNT_NAME], client_ip, client_port)
+                self.database.user_login(message[USER][ACCOUNT_NAME], client_ip, client_port)
                 send_message(client, RESPONSE_200)
                 with self.connected_lock:
                     self.new_connection = True
@@ -161,16 +163,20 @@ class Server(threading.Thread, metaclass=ServerMaker):
         # Если это сообщение, то добавляем его в очередь сообщений. Ответ не требуется.
         elif ACTION in message and message[ACTION] == MESSAGE and DESTINATION in message and TIME in message \
                 and SENDER in message and MESSAGE_TEXT in message and self.names[message[SENDER]] == client:
-            self.messages.append(message)
-            self.database.process_message(
-                message[SENDER], message[DESTINATION])
+            if message[DESTINATION] in self.names:
+                self.messages.append(message)
+                self.database.process_message(message[SENDER], message[DESTINATION])
+                send_message(client, RESPONSE_200)
+            else:
+                response = RESPONSE_400
+                response[ERROR] = 'Пользователь не зарегистрирован на сервере.'
+                send_message(client, response)
             return
         # Если клиент выходит
         elif ACTION in message and message[ACTION] == EXIT and ACCOUNT_NAME in message \
                 and self.names[message[ACCOUNT_NAME]] == client:
             self.database.user_logout(message[ACCOUNT_NAME])
-            logger.info(
-                f'Клиент {message[ACCOUNT_NAME]} корректно отключился от сервера.')
+            logger.info(f'Клиент {message[ACCOUNT_NAME]} корректно отключился от сервера.')
             self.clients.remove(self.names[message[ACCOUNT_NAME]])
             self.names[message[ACCOUNT_NAME]].close()
             del self.names[message[ACCOUNT_NAME]]
@@ -201,8 +207,7 @@ class Server(threading.Thread, metaclass=ServerMaker):
         elif ACTION in message and message[ACTION] == USERS_REQUEST and ACCOUNT_NAME in message \
                 and self.names[message[ACCOUNT_NAME]] == client:
             response = RESPONSE_202
-            response[LIST_INFO] = [user[0]
-                                   for user in self.database.users_list()]
+            response[LIST_INFO] = [user[0] for user in self.database.users_list()]
             send_message(client, response)
 
         # Иначе отдаём Bad request
