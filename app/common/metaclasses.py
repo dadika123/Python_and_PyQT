@@ -3,6 +3,12 @@ import socket
 
 
 class ClientMaker(type):
+    """
+    Метакласс, проверяющий что в результирующем классе нет серверных
+    вызовов таких как: accept, listen. Также проверяется, что сокет не
+    создаётся внутри конструктора класса.
+    """
+
     def __new__(cls, name, bases, dct):
         # Check all instances at class creation and throw error if the are of socket instance
         for key, value in dct.items():
@@ -66,6 +72,12 @@ class ClientMaker(type):
 
 
 class ServerMaker(type):
+    """
+    Метакласс, проверяющий что в результирующем классе нет клиентских
+    вызовов таких как: connect. Также проверяется, что серверный
+    сокет является TCP и работает по IPv4 протоколу.
+    """
+
     def __init__(cls, name, bases, dct):
         sock_alias = ['sock', 'socket', 'server']
         com_fcn = ['get_message', 'send_message', 'process_message', 'process_client_message']

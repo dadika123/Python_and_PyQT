@@ -9,8 +9,12 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem
 logger = logging.getLogger('client')
 
 
-# Диалог выбора контакта для удаления
 class DelContactDialog(QDialog):
+    """
+    Диалог удаления контакта. Предлагает текущий список контактов,
+    не имеет обработчиков для действий.
+    """
+
     def __init__(self, database):
         super().__init__()
         self.database = database

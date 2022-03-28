@@ -17,6 +17,11 @@ logger = logging.getLogger('server')
 
 
 class MessageProcessor(threading.Thread):
+    """
+    Основной класс сервера. Принимает содинения, словари - пакеты
+    от клиентов, обрабатывает поступающие сообщения.
+    Работает в качестве отдельного потока.
+    """
     port = Port()
 
     def __init__(self, listen_address, listen_port, database):
@@ -66,6 +71,10 @@ class MessageProcessor(threading.Thread):
                         self.remove_client(client_with_message)
 
     def remove_client(self, client):
+        """
+        Метод обработчик клиента с которым прервана связь.
+        Ищет клиента и удаляет его из списков и базы:
+        """
         logger.info(f'Клиент {client.getpeername()} отключился от сервера.')
         for name in self.names:
             if self.names[name] == client:
@@ -85,6 +94,9 @@ class MessageProcessor(threading.Thread):
         self.sock.listen(MAX_CONNECTIONS)
 
     def process_message(self, message):
+        """
+        Метод отправки сообщения клиенту.
+        """
         if message[DESTINATION] in self.names and self.names[message[DESTINATION]
         ] in self.listen_sockets:
             try:
@@ -103,6 +115,7 @@ class MessageProcessor(threading.Thread):
 
     @login_required
     def process_client_message(self, message, client):
+        """Метод отбработчик поступающих сообщений."""
         logger.debug(f'Разбор сообщения от клиента : {message}')
         if ACTION in message and message[ACTION] == PRESENCE and TIME in message and USER in message:
             self.autorize_user(message, client)
@@ -184,7 +197,7 @@ class MessageProcessor(threading.Thread):
                 self.remove_client(client)
 
     def autorize_user(self, message, sock):
-        logger.debug(f'Start auth process for {message[USER]}')
+        """Метод реализующий авторизцию пользователей."""
         if message[USER][ACCOUNT_NAME] in self.names.keys():
             response = RESPONSE_400
             response[ERROR] = 'Имя пользователя уже занято.'
@@ -246,6 +259,7 @@ class MessageProcessor(threading.Thread):
                 sock.close()
 
     def service_update_lists(self):
+        """Метод реализующий отправки сервисного сообщения 205 клиентам."""
         for client in self.names:
             try:
                 send_message(self.names[client], RESPONSE_205)

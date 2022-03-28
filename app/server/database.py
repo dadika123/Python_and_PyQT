@@ -4,7 +4,15 @@ import datetime
 
 
 class ServerDb:
+    """
+    Класс - оболочка для работы с базой данных сервера.
+    Использует SQLite базу данных, реализован с помощью
+    SQLAlchemy ORM и используется классический подход.
+    """
+
     class AllUsers:
+        """Класс - отображение таблицы всех пользователей."""
+
         def __init__(self, username, passwd_hash, first_name='', last_name=''):
             self.id = None
             self.username = username
@@ -17,6 +25,8 @@ class ServerDb:
             self.pubkey = None
 
     class ActiveUsers:
+        """Класс - отображение таблицы активных пользователей."""
+
         def __init__(self, user_id, ip, port, logged_at):
             self.id = None
             self.user_id = user_id
@@ -25,6 +35,8 @@ class ServerDb:
             self.logged_at = logged_at
 
     class UsersLoginHistory:
+        """Класс - отображение таблицы истории входов."""
+
         def __init__(self, user_id, ip, port, logged_at):
             self.id = None
             self.user_id = user_id
@@ -33,12 +45,16 @@ class ServerDb:
             self.logged_at = logged_at
 
     class UsersContacts:
+        """Класс - отображение таблицы контактов пользователей."""
+
         def __init__(self, user_id, contact_id):
             self.id = None
             self.user_id = user_id
             self.contact_id = contact_id
 
     class UsersHistory:
+        """Класс - отображение таблицы истории действий."""
+
         def __init__(self, user_id):
             self.id = None
             self.user_id = user_id
@@ -152,6 +168,10 @@ class ServerDb:
         self.session.commit()
 
     def user_register(self, username, passwd_hash):
+        """
+        Метод регистрации пользователя.
+        Принимает имя и хэш пароля, создаёт запись в таблице статистики.
+        """
         user = self.AllUsers(username, passwd_hash)
         self.session.add(user)
         self.session.commit()
@@ -161,6 +181,7 @@ class ServerDb:
         self.session.commit()
 
     def user_delete(self, username):
+        """Метод удаляющий пользователя из базы."""
         user = self.session.query(self.AllUsers).filter_by(username=username).first()
         self.session.query(self.ActiveUsers).filter_by(user_id=user.id).delete()
         self.session.query(self.UsersLoginHistory).filter_by(user_id=user.id).delete()
@@ -171,25 +192,30 @@ class ServerDb:
         self.session.commit()
 
     def get_hash(self, username):
+        """Метод получения хэша пароля пользователя."""
         user = self.session.query(self.AllUsers).filter_by(username=username).first()
         return user.passwd_hash
 
     def get_pubkey(self, username):
+        """Метод получения публичного ключа пользователя."""
         user = self.session.query(self.AllUsers).filter_by(username=username).first()
         return user.pubkey
 
     def check_user(self, username):
+        """Метод проверяющий существование пользователя."""
         if self.session.query(self.AllUsers).filter_by(username=username).count():
             return True
         else:
             return False
 
     def user_logout(self, username):
+        """Метод фиксирующий отключения пользователя."""
         user = self.session.query(self.AllUsers).filter_by(username=username).first()
         self.session.query(self.ActiveUsers).filter_by(user_id=user.id).delete()
         self.session.commit()
 
     def users_list(self):
+        """Метод возвращающий список известных пользователей со временем последнего входа."""
         query = self.session.query(
             self.AllUsers.username,
             self.AllUsers.first_name,
@@ -199,6 +225,7 @@ class ServerDb:
         return query.all()
 
     def active_users_list(self):
+        """Метод возвращающий список активных пользователей."""
         query = self.session.query(
             self.AllUsers.username,
             self.ActiveUsers.ip,
@@ -208,6 +235,7 @@ class ServerDb:
         return query.all()
 
     def login_history(self, username=None):
+        """Метод возвращающий историю входов."""
         query = self.session.query(self.AllUsers.username,
                                    self.UsersLoginHistory.ip,
                                    self.UsersLoginHistory.port,
@@ -218,6 +246,7 @@ class ServerDb:
         return query.all()
 
     def process_message(self, sender_username, recipient_username):
+        """Метод записывающий в таблицу статистики факт передачи сообщения."""
         sender_id = self.session.query(self.AllUsers).filter_by(username=sender_username).first().id
         sender_row = self.session.query(self.UsersHistory).filter_by(user_id=sender_id).first()
         sender_row.sent += 1
@@ -229,6 +258,7 @@ class ServerDb:
         self.session.commit()
 
     def add_contact(self, username, contact_username):
+        """Метод добавления контакта для пользователя."""
         user = self.session.query(self.AllUsers).filter_by(username=username).first()
         contact_user = self.session.query(self.AllUsers).filter_by(username=contact_username).first()
 
@@ -241,6 +271,7 @@ class ServerDb:
         self.session.commit()
 
     def remove_contact(self, username, contact_username):
+        """Метод удаления контакта пользователя."""
         user = self.session.query(self.AllUsers).filter_by(username=username).first()
         contact_user = self.session.query(self.AllUsers).filter_by(username=contact_username).first()
 
@@ -254,6 +285,7 @@ class ServerDb:
         self.session.commit()
 
     def get_contacts(self, username):
+        """Метод возвращающий список контактов пользователя."""
         user = self.session.query(self.AllUsers).filter_by(username=username).one()
 
         query = self.session.query(self.UsersContacts, self.AllUsers.username). \
@@ -263,6 +295,7 @@ class ServerDb:
         return [contact[1] for contact in query.all()]
 
     def message_history(self):
+        """Метод возвращающий статистику сообщений."""
         query = self.session.query(
             self.AllUsers.username,
             self.AllUsers.last_login,
