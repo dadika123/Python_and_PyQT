@@ -1,18 +1,10 @@
 import socket
 import logging
 import logs.config_client_log
-import logs.config_server_log
 import sys
 
 sys.path.append('../')
-
-# метод определения модуля, источника запуска.
-if sys.argv[0].find('client') == -1:
-    # если не клиент то сервер!
-    logger = logging.getLogger('server')
-else:
-    # ну, раз не сервер, то клиент
-    logger = logging.getLogger('client')
+logger = logging.getLogger('client')
 
 
 def log(func_to_log):

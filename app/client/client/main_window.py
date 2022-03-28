@@ -8,7 +8,6 @@ import json
 import logging
 import base64
 
-sys.path.append('../')
 from client.main_window_conv import Ui_MainClientWindow
 from client.add_contact import AddContactDialog
 from client.del_contact import DelContactDialog
