@@ -130,3 +130,7 @@ dmypy.json
 /app/*.db3
 /app/*.db3-journal
 *.key
+
+.idea/
+
+.vscode/
